@@ -69,9 +69,14 @@ var ORDER_RESULT_HEADER = 'Converted Total';
 
 // ---- Dashboard sheet layout ----
 var DASH_NAME_COL = 2; // Column B - Internal Name
-var DASH_QTY_COL = 3;  // Column C - raw grams
+var DASH_QTY_COL = 3;  // Column C - raw grams (or "N (M piece)" for exempt items)
 var DASH_KG_COL = 6;   // Column F - Converted KG
 var DASH_HEADER_ROW = 1;
+
+// Internal Names exempt from gram->KG conversion: Column C instead holds a
+// value like "178045 (3070 piece)", and Column F just gets the number
+// inside the parentheses (3070) copied over, with no KG math applied.
+var DASH_KG_EXEMPT_NAMES = ['FRESH EGG WHOLE'];
 
 // ---- Chilled Orders sheet layout ----
 var CHILLED_NAME_COL = 1;        // Column A - Internal Name / category
@@ -139,10 +144,8 @@ function onEdit(e) {
 
   if (sheetName === DASHBOARD_SHEET_NAME) {
     if (row <= DASH_HEADER_ROW) return;
-    if (col === DASH_QTY_COL) {
+    if (col === DASH_QTY_COL || col === DASH_NAME_COL) {
       recalcDashboardRow(sheet, row);
-      syncChilledOrdersConsumption();
-    } else if (col === DASH_NAME_COL) {
       syncChilledOrdersConsumption();
     }
     return;
@@ -267,13 +270,41 @@ function recalcAllDashboard() {
 }
 
 function recalcDashboardRow(sheet, row) {
-  var grams = sheet.getRange(row, DASH_QTY_COL).getValue();
-  if (grams === '' || isNaN(grams)) {
+  var name = sheet.getRange(row, DASH_NAME_COL).getValue();
+  var rawQty = sheet.getRange(row, DASH_QTY_COL).getValue();
+
+  if (isExemptFromKgConversion(name)) {
+    var parenValue = extractParenthesesNumber(rawQty);
+    if (parenValue !== null) {
+      sheet.getRange(row, DASH_KG_COL).setValue(parenValue);
+    }
+    return;
+  }
+
+  if (rawQty === '' || isNaN(rawQty)) {
     return; // nothing usable to calculate; leave Column F as-is
   }
 
-  var kg = Math.ceil(grams / 1000);
+  var kg = Math.ceil(rawQty / 1000);
   sheet.getRange(row, DASH_KG_COL).setValue(kg);
+}
+
+function isExemptFromKgConversion(name) {
+  return DASH_KG_EXEMPT_NAMES.indexOf(normalizeName(name)) !== -1;
+}
+
+/**
+ * Extracts the number inside parentheses from a value like
+ * "178045 (3070 piece)" -> 3070. Returns null if no parenthesized
+ * number is found.
+ */
+function extractParenthesesNumber(value) {
+  if (value === '' || value === null || value === undefined) return null;
+  var parenMatch = value.toString().match(/\(([^)]*)\)/);
+  if (!parenMatch) return null;
+  var numMatch = parenMatch[1].match(/-?\d+(?:\.\d+)?/);
+  if (!numMatch) return null;
+  return parseFloat(numMatch[0]);
 }
 
 // ========================== Chilled Orders sheet ==========================
