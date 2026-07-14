@@ -42,11 +42,10 @@
  *        insensitive) — this is what makes "Feta Cheese" match
  *        "DANISH GURBET FETA CHEESE 1X16KG".
  *      - For categories with no shared wording (e.g. "Parmesan Cheese" ->
- *        "GRANA PADANO ...", "Swiss Cheese" -> "EMMENTAL ..."), add a row
- *        to the Item Aliases sheet (ITEM_ALIASES_SHEET_NAME) with the
- *        category name in Column A and comma-separated search keywords in
- *        Column B (e.g. "Grana Padano, Parmigiano"); those keywords are
- *        tried instead of the category name itself.
+ *        "GRANA PADANO ...", "Swiss Cheese" -> "EMMENTAL ..."), add an
+ *        entry to the ITEM_ALIASES map below (category name -> array of
+ *        alternate search keywords); those keywords are tried instead of
+ *        the category name itself.
  *      - If more than one Precoro row matches, the last one (bottom-most
  *        row) wins.
  *      - Rows with no match at all (no alias entry and no substring match)
@@ -60,7 +59,6 @@
 var ORDER_SHEET_NAME = 'Precoro';
 var DASHBOARD_SHEET_NAME = 'Dashboard';
 var CHILLED_SHEET_NAME = 'Chilled Orders';
-var ITEM_ALIASES_SHEET_NAME = 'Item Aliases';
 
 // ---- Precoro sheet layout ----
 var ORDER_NAME_COL = 3;    // Column C - Name
@@ -82,10 +80,15 @@ var CHILLED_RECEIVED_COL = 4;    // Column D - Received (numeric, from Precoro C
 var CHILLED_CONSUMPTION_COL = 5; // Column E - DB Consumption
 var CHILLED_HEADER_ROW = 1;
 
-// ---- Item Aliases sheet layout ----
-var ALIAS_CATEGORY_COL = 1; // Column A - Chilled Orders category name
-var ALIAS_KEYWORDS_COL = 2; // Column B - comma-separated search keywords
-var ALIAS_HEADER_ROW = 1;
+// ---- Item Aliases: hardcoded here (no extra sheet needed) ----
+// Chilled Orders category name -> alternate keywords to search for in
+// Precoro's item Name, for categories that share no wording with the
+// actual product name. Add more entries here as you find them.
+var ITEM_ALIASES = {
+  'YOGURT LOW FAT': ['YOGHURT'],
+  'PARMESAN CHEESE': ['GRANA PADANO', 'PARMIGIANO'],
+  'SWISS CHEESE': ['EMMENTAL', 'GRUYERE']
+};
 
 var UNIT_ALTERNATION = '(KGS|KG|GRAMS|GRAM|GMS|GM|G|LTRS|LTR|ML|CL|L|PIECES|PIECE|PCS)';
 var SIZE_UNIT_REGEX = new RegExp('(\\d+(?:\\.\\d+)?)\\s*' + UNIT_ALTERNATION + '\\b', 'i');
@@ -149,12 +152,6 @@ function onEdit(e) {
       syncChilledOrdersConsumption();
       syncChilledOrdersItemMatch();
     }
-    return;
-  }
-
-  if (sheetName === ITEM_ALIASES_SHEET_NAME) {
-    if (row <= ALIAS_HEADER_ROW) return;
-    syncChilledOrdersItemMatch();
     return;
   }
 }
@@ -313,8 +310,8 @@ function normalizeName(value) {
  * Matches each Chilled Orders row's category (Column A) against Precoro's
  * item Name (Column C), and writes the matched Name into Column B and the
  * numeric portion of that item's Converted Total (Column T) into Column D.
- * See the Item Aliases sheet for how to handle categories with no shared
- * wording (e.g. "Parmesan Cheese" -> "GRANA PADANO ...").
+ * See the ITEM_ALIASES map above for how to handle categories with no
+ * shared wording (e.g. "Parmesan Cheese" -> "GRANA PADANO ...").
  */
 function syncChilledOrdersItemMatch() {
   var ss = SpreadsheetApp.getActive();
@@ -322,7 +319,7 @@ function syncChilledOrdersItemMatch() {
   var chilledSheet = ss.getSheetByName(CHILLED_SHEET_NAME);
   if (!precoroSheet || !chilledSheet) return;
 
-  var aliasMap = getAliasMap(ss);
+  var aliasMap = getAliasMap();
 
   var precoroLastRow = precoroSheet.getLastRow();
   var precoroRowCount = Math.max(precoroLastRow - ORDER_HEADER_ROW, 0);
@@ -364,32 +361,16 @@ function syncChilledOrdersItemMatch() {
 }
 
 /**
- * Reads the Item Aliases sheet (Column A: category name, Column B:
- * comma-separated search keywords) into a map of normalized category name
- * -> array of normalized keywords. Returns an empty map if the sheet
- * doesn't exist.
+ * Builds a map of normalized category name -> array of normalized alias
+ * keywords from the hardcoded ITEM_ALIASES table above.
  */
-function getAliasMap(ss) {
+function getAliasMap() {
   var map = {};
-  var sheet = ss.getSheetByName(ITEM_ALIASES_SHEET_NAME);
-  if (!sheet) return map;
-
-  var lastRow = sheet.getLastRow();
-  for (var row = ALIAS_HEADER_ROW + 1; row <= lastRow; row++) {
-    var category = sheet.getRange(row, ALIAS_CATEGORY_COL).getValue();
-    var keywordsRaw = sheet.getRange(row, ALIAS_KEYWORDS_COL).getValue();
+  for (var category in ITEM_ALIASES) {
+    if (!Object.prototype.hasOwnProperty.call(ITEM_ALIASES, category)) continue;
     var normCategory = normalizeName(category);
-    if (!normCategory || !keywordsRaw) continue;
-
-    var keywords = keywordsRaw
-      .toString()
-      .split(',')
-      .map(function (s) { return normalizeName(s); })
-      .filter(function (s) { return s; });
-
-    if (keywords.length) {
-      map[normCategory] = keywords;
-    }
+    var keywords = ITEM_ALIASES[category].map(function (s) { return normalizeName(s); });
+    map[normCategory] = keywords;
   }
   return map;
 }
