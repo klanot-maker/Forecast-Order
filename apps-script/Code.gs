@@ -8,7 +8,10 @@
  *   - Weight units (G/GM/GRAM/KG) are expressed in KG.
  *   - Volume units (LTR/ML/CL) are left in their own unit (no density
  *     assumption is made to convert liters to kilograms).
- *   - If no size/unit can be found in the Name, Column T is left untouched.
+ *   - If a unit keyword is found but with no number in front of it (e.g.
+ *     "GRANA PADANO WEDGE BONI SPA KGS"), the size defaults to 1.
+ *   - If no unit keyword at all can be found in the Name, Column T is left
+ *     untouched.
  *
  * Runs automatically: onOpen() backfills the whole sheet, onEdit() updates
  * a row whenever its Name or Quantity is changed.
@@ -26,6 +29,7 @@ var RESULT_HEADER = 'Converted Total';
 
 var UNIT_ALTERNATION = '(KGS|KG|GRAMS|GRAM|GMS|GM|G|LTRS|LTR|ML|CL|L)';
 var SIZE_UNIT_REGEX = new RegExp('(\\d+(?:\\.\\d+)?)\\s*' + UNIT_ALTERNATION + '\\b', 'i');
+var UNIT_ONLY_REGEX = new RegExp('\\b' + UNIT_ALTERNATION + '\\b', 'i');
 var PACK_BEFORE_REGEX = /(\d+(?:\.\d+)?)\s*[xX]\s*$/;
 var PACK_AFTER_REGEX = /^\s*[xX]\s*(\d+(?:\.\d+)?)/;
 
@@ -108,16 +112,27 @@ function normalizeVolumeUnit(unitRaw) {
  * Finds the first "<number><unit>" occurrence in the name (e.g. "349GM",
  * "2.75KG", "1 LTR") and looks immediately before/after it for a
  * "<n> X" / "X <n>" pack-count multiplier (e.g. "1X16KG", "1Kg X 12 pcs").
- * Returns null if no size/unit is present.
+ * If a unit keyword is present but with no number in front of it (e.g.
+ * "... SPA KGS"), the size defaults to 1. Returns null only if no unit
+ * keyword at all is present.
  */
 function parseSizeAndUnit(name) {
-  var match = name.match(SIZE_UNIT_REGEX);
-  if (!match) return null;
+  var sizeNum, unitRaw, matchIndex, matchEnd;
 
-  var sizeNum = parseFloat(match[1]);
-  var unitRaw = match[2].toUpperCase();
-  var matchIndex = match.index;
-  var matchEnd = matchIndex + match[0].length;
+  var match = name.match(SIZE_UNIT_REGEX);
+  if (match) {
+    sizeNum = parseFloat(match[1]);
+    unitRaw = match[2].toUpperCase();
+    matchIndex = match.index;
+    matchEnd = matchIndex + match[0].length;
+  } else {
+    var unitOnlyMatch = name.match(UNIT_ONLY_REGEX);
+    if (!unitOnlyMatch) return null;
+    sizeNum = 1;
+    unitRaw = unitOnlyMatch[1].toUpperCase();
+    matchIndex = unitOnlyMatch.index;
+    matchEnd = matchIndex + unitOnlyMatch[0].length;
+  }
 
   var packCount = 1;
   var before = name.substring(Math.max(0, matchIndex - 15), matchIndex);
