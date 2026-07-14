@@ -1,11 +1,11 @@
 /**
  * Unit Conversion Calculator
  *
- * This spreadsheet has three pieces of automation, each scoped to its own
+ * This spreadsheet has four pieces of automation, each scoped to its own
  * named tab so edits on one sheet never misfire calculations meant for
  * another:
  *
- * 1. Orders sheet (ORDER_SHEET_NAME) — reads the pack size embedded in the
+ * 1. Precoro sheet (ORDER_SHEET_NAME) — reads the pack size embedded in the
  *    item Name (Column C) — e.g. "1 LTR", "500 GM", "2.75KG", "1X16KG",
  *    "1Kg X 12 pcs" — multiplies it by the pack count (if an "X n"
  *    multiplier is present) and by the ordered Quantity (Column P), then
@@ -29,16 +29,37 @@
  *    Dashboard get 0. If the Dashboard has more than one row with the same
  *    Internal Name, the last one (bottom-most row) wins.
  *
+ * 4. Chilled Orders Column B/D — for every row, matches its category name
+ *    (Column A, e.g. "Feta Cheese") against Precoro's item Name (Column C)
+ *    and copies the matched item's Name into Column B (Item Name) and the
+ *    numeric portion of its Converted Total (Column T) into Column D
+ *    (Received):
+ *      - By default, the whole category name (e.g. "FETA CHEESE") is
+ *        searched for as a substring inside the Precoro Name (case
+ *        insensitive) — this is what makes "Feta Cheese" match
+ *        "DANISH GURBET FETA CHEESE 1X16KG".
+ *      - For categories with no shared wording (e.g. "Parmesan Cheese" ->
+ *        "GRANA PADANO ...", "Swiss Cheese" -> "EMMENTAL ..."), add a row
+ *        to the Item Aliases sheet (ITEM_ALIASES_SHEET_NAME) with the
+ *        category name in Column A and comma-separated search keywords in
+ *        Column B (e.g. "Grana Padano, Parmigiano"); those keywords are
+ *        tried instead of the category name itself.
+ *      - If more than one Precoro row matches, the last one (bottom-most
+ *        row) wins.
+ *      - Rows with no match at all (no alias entry and no substring match)
+ *        are left untouched in Column B/D.
+ *
  * Runs automatically: onOpen() backfills every sheet, onEdit() updates
  * incrementally whenever a relevant cell changes.
  */
 
 // ---- Sheet/tab names — verify these match your actual tabs ----
-var ORDER_SHEET_NAME = 'Orders'; // TODO: set to your actual Forecast Order tab name
+var ORDER_SHEET_NAME = 'Precoro';
 var DASHBOARD_SHEET_NAME = 'Dashboard';
 var CHILLED_SHEET_NAME = 'Chilled Orders';
+var ITEM_ALIASES_SHEET_NAME = 'Item Aliases';
 
-// ---- Orders sheet layout ----
+// ---- Precoro sheet layout ----
 var ORDER_NAME_COL = 3;    // Column C - Name
 var ORDER_QTY_COL = 16;    // Column P - Quantity
 var ORDER_RESULT_COL = 20; // Column T - Converted Total
@@ -52,9 +73,16 @@ var DASH_KG_COL = 6;   // Column F - Converted KG
 var DASH_HEADER_ROW = 1;
 
 // ---- Chilled Orders sheet layout ----
-var CHILLED_NAME_COL = 1;        // Column A - Internal Name
+var CHILLED_NAME_COL = 1;        // Column A - Internal Name / category
+var CHILLED_ITEM_NAME_COL = 2;   // Column B - Item Name (matched from Precoro)
+var CHILLED_RECEIVED_COL = 4;    // Column D - Received (numeric, from Precoro Converted Total)
 var CHILLED_CONSUMPTION_COL = 5; // Column E - DB Consumption
 var CHILLED_HEADER_ROW = 1;
+
+// ---- Item Aliases sheet layout ----
+var ALIAS_CATEGORY_COL = 1; // Column A - Chilled Orders category name
+var ALIAS_KEYWORDS_COL = 2; // Column B - comma-separated search keywords
+var ALIAS_HEADER_ROW = 1;
 
 var UNIT_ALTERNATION = '(KGS|KG|GRAMS|GRAM|GMS|GM|G|LTRS|LTR|ML|CL|L)';
 var SIZE_UNIT_REGEX = new RegExp('(\\d+(?:\\.\\d+)?)\\s*' + UNIT_ALTERNATION + '\\b', 'i');
@@ -69,9 +97,10 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Unit Tools')
     .addItem('Run All Conversions', 'runAll')
-    .addItem('Recalculate Orders (KG Conversion)', 'recalcAllOrders')
+    .addItem('Recalculate Precoro (KG Conversion)', 'recalcAllOrders')
     .addItem('Recalculate Dashboard (KG Conversion)', 'recalcAllDashboard')
     .addItem('Sync Chilled Orders Consumption', 'syncChilledOrdersConsumption')
+    .addItem('Sync Chilled Orders Item Match', 'syncChilledOrdersItemMatch')
     .addToUi();
   runAll();
 }
@@ -80,6 +109,7 @@ function runAll() {
   recalcAllOrders();
   recalcAllDashboard();
   syncChilledOrdersConsumption();
+  syncChilledOrdersItemMatch();
 }
 
 function onEdit(e) {
@@ -93,6 +123,7 @@ function onEdit(e) {
     if (row <= ORDER_HEADER_ROW) return;
     if (col === ORDER_NAME_COL || col === ORDER_QTY_COL) {
       recalcOrderRow(sheet, row);
+      syncChilledOrdersItemMatch();
     }
     return;
   }
@@ -112,7 +143,14 @@ function onEdit(e) {
     if (row <= CHILLED_HEADER_ROW) return;
     if (col === CHILLED_NAME_COL) {
       syncChilledOrdersConsumption();
+      syncChilledOrdersItemMatch();
     }
+    return;
+  }
+
+  if (sheetName === ITEM_ALIASES_SHEET_NAME) {
+    if (row <= ALIAS_HEADER_ROW) return;
+    syncChilledOrdersItemMatch();
     return;
   }
 }
@@ -262,4 +300,115 @@ function syncChilledOrdersConsumption() {
 function normalizeName(value) {
   if (!value && value !== 0) return '';
   return value.toString().trim().toUpperCase().replace(/\s+/g, ' ');
+}
+
+/**
+ * Matches each Chilled Orders row's category (Column A) against Precoro's
+ * item Name (Column C), and writes the matched Name into Column B and the
+ * numeric portion of that item's Converted Total (Column T) into Column D.
+ * See the Item Aliases sheet for how to handle categories with no shared
+ * wording (e.g. "Parmesan Cheese" -> "GRANA PADANO ...").
+ */
+function syncChilledOrdersItemMatch() {
+  var ss = SpreadsheetApp.getActive();
+  var precoroSheet = ss.getSheetByName(ORDER_SHEET_NAME);
+  var chilledSheet = ss.getSheetByName(CHILLED_SHEET_NAME);
+  if (!precoroSheet || !chilledSheet) return;
+
+  var aliasMap = getAliasMap(ss);
+
+  var precoroLastRow = precoroSheet.getLastRow();
+  var precoroRowCount = Math.max(precoroLastRow - ORDER_HEADER_ROW, 0);
+  var precoroNames = precoroRowCount
+    ? precoroSheet.getRange(ORDER_HEADER_ROW + 1, ORDER_NAME_COL, precoroRowCount, 1).getValues()
+    : [];
+  var precoroTotals = precoroRowCount
+    ? precoroSheet.getRange(ORDER_HEADER_ROW + 1, ORDER_RESULT_COL, precoroRowCount, 1).getValues()
+    : [];
+
+  var chilledLastRow = chilledSheet.getLastRow();
+  for (var row = CHILLED_HEADER_ROW + 1; row <= chilledLastRow; row++) {
+    var category = chilledSheet.getRange(row, CHILLED_NAME_COL).getValue();
+    var keywords = getKeywordsForCategory(category, aliasMap);
+    if (!keywords.length) continue;
+
+    var matchIndex = -1;
+    for (var i = 0; i < precoroNames.length; i++) {
+      var pName = precoroNames[i][0];
+      if (!pName || typeof pName !== 'string') continue;
+      var pNameNormalized = normalizeName(pName);
+      for (var k = 0; k < keywords.length; k++) {
+        if (pNameNormalized.indexOf(keywords[k]) !== -1) {
+          matchIndex = i; // keep scanning; last match (bottom-most row) wins
+          break;
+        }
+      }
+    }
+
+    if (matchIndex === -1) continue; // no match found; leave Column B/D as-is
+
+    chilledSheet.getRange(row, CHILLED_ITEM_NAME_COL).setValue(precoroNames[matchIndex][0]);
+
+    var numeric = extractLeadingNumber(precoroTotals[matchIndex][0]);
+    if (numeric !== null) {
+      chilledSheet.getRange(row, CHILLED_RECEIVED_COL).setValue(numeric);
+    }
+  }
+}
+
+/**
+ * Reads the Item Aliases sheet (Column A: category name, Column B:
+ * comma-separated search keywords) into a map of normalized category name
+ * -> array of normalized keywords. Returns an empty map if the sheet
+ * doesn't exist.
+ */
+function getAliasMap(ss) {
+  var map = {};
+  var sheet = ss.getSheetByName(ITEM_ALIASES_SHEET_NAME);
+  if (!sheet) return map;
+
+  var lastRow = sheet.getLastRow();
+  for (var row = ALIAS_HEADER_ROW + 1; row <= lastRow; row++) {
+    var category = sheet.getRange(row, ALIAS_CATEGORY_COL).getValue();
+    var keywordsRaw = sheet.getRange(row, ALIAS_KEYWORDS_COL).getValue();
+    var normCategory = normalizeName(category);
+    if (!normCategory || !keywordsRaw) continue;
+
+    var keywords = keywordsRaw
+      .toString()
+      .split(',')
+      .map(function (s) { return normalizeName(s); })
+      .filter(function (s) { return s; });
+
+    if (keywords.length) {
+      map[normCategory] = keywords;
+    }
+  }
+  return map;
+}
+
+/**
+ * Returns the list of normalized search keywords for a Chilled Orders
+ * category: its Item Aliases entry if one exists, otherwise the whole
+ * category name itself (e.g. "FETA CHEESE").
+ */
+function getKeywordsForCategory(category, aliasMap) {
+  var normCategory = normalizeName(category);
+  if (!normCategory) return [];
+  if (Object.prototype.hasOwnProperty.call(aliasMap, normCategory)) {
+    return aliasMap[normCategory];
+  }
+  return [normCategory];
+}
+
+/**
+ * Extracts the leading numeric portion of a "<value> <unit>" string (as
+ * written by recalcOrderRow into Precoro Column T), e.g. "8.376 KG" -> 8.376.
+ * Returns null if no number is found.
+ */
+function extractLeadingNumber(value) {
+  if (value === '' || value === null || value === undefined) return null;
+  var match = value.toString().trim().match(/^(-?\d+(?:\.\d+)?)/);
+  if (!match) return null;
+  return parseFloat(match[1]);
 }
