@@ -7,12 +7,15 @@
  *
  * 1. Precoro sheet (ORDER_SHEET_NAME) — reads the pack size embedded in the
  *    item Name (Column C) — e.g. "1 LTR", "500 GM", "2.75KG", "1X16KG",
- *    "1Kg X 12 pcs" — multiplies it by the pack count (if an "X n"
- *    multiplier is present) and by the ordered Quantity (Column P), then
- *    writes the result to Column T:
+ *    "1Kg X 12 pcs", "360PCS" — multiplies it by the pack count (if an
+ *    "X n" multiplier is present) and by the ordered Quantity (Column P),
+ *    then writes the result to Column T:
  *      - Weight units (G/GM/GRAM/KG) are expressed in KG.
  *      - Volume units (LTR/ML/CL) are left in their own unit (no density
  *        assumption is made to convert liters to kilograms).
+ *      - Count units (PCS/PIECE/PIECES), e.g. "EGGS WITH SHELL MEDIUM 1
+ *        CARTON 360PCS", are left as PCS (multiplied straight through,
+ *        no weight conversion).
  *      - If a unit keyword is found but with no number in front of it
  *        (e.g. "... SPA KGS"), the size defaults to 1.
  *      - If no unit keyword at all can be found in the Name, Column T is
@@ -84,7 +87,7 @@ var ALIAS_CATEGORY_COL = 1; // Column A - Chilled Orders category name
 var ALIAS_KEYWORDS_COL = 2; // Column B - comma-separated search keywords
 var ALIAS_HEADER_ROW = 1;
 
-var UNIT_ALTERNATION = '(KGS|KG|GRAMS|GRAM|GMS|GM|G|LTRS|LTR|ML|CL|L)';
+var UNIT_ALTERNATION = '(KGS|KG|GRAMS|GRAM|GMS|GM|G|LTRS|LTR|ML|CL|L|PIECES|PIECE|PCS)';
 var SIZE_UNIT_REGEX = new RegExp('(\\d+(?:\\.\\d+)?)\\s*' + UNIT_ALTERNATION + '\\b', 'i');
 var UNIT_ONLY_REGEX = new RegExp('\\b' + UNIT_ALTERNATION + '\\b', 'i');
 var PACK_BEFORE_REGEX = /(\d+(?:\.\d+)?)\s*[xX]\s*$/;
@@ -92,6 +95,7 @@ var PACK_AFTER_REGEX = /^\s*[xX]\s*(\d+(?:\.\d+)?)/;
 
 var WEIGHT_UNITS = ['G', 'GM', 'GMS', 'GRAM', 'GRAMS'];
 var KG_UNITS = ['KG', 'KGS'];
+var COUNT_UNITS = ['PCS', 'PIECE', 'PIECES'];
 
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -192,6 +196,9 @@ function recalcOrderRow(sheet, row) {
   } else if (KG_UNITS.indexOf(parsed.unitRaw) !== -1) {
     value = grandTotal;
     unitLabel = 'KG';
+  } else if (COUNT_UNITS.indexOf(parsed.unitRaw) !== -1) {
+    value = grandTotal;
+    unitLabel = 'PCS';
   } else {
     value = grandTotal;
     unitLabel = normalizeVolumeUnit(parsed.unitRaw);
